@@ -1385,12 +1385,13 @@ static int check_stack_access(struct bpf_verifier_env *env,
 
 /* check read/write into map element returned by bpf_map_lookup_elem() */
 static int __check_map_access(struct bpf_verifier_env *env, u32 regno, int off,
-			    int size)
+			      int size, bool zero_size_allowed)
 {
 	struct bpf_reg_state *regs = cur_regs(env);
 	struct bpf_map *map = regs[regno].map_ptr;
 
-	if (off < 0 || size <= 0 || off + size > map->value_size) {
+	if (off < 0 || size < 0 || (size == 0 && !zero_size_allowed) ||
+	    off + size > map->value_size) {
 		verbose(env, "invalid access to map value, value_size=%d off=%d size=%d\n",
 			map->value_size, off, size);
 		return -EACCES;
@@ -1400,7 +1401,7 @@ static int __check_map_access(struct bpf_verifier_env *env, u32 regno, int off,
 
 /* check read/write into a map element with possible variable offset */
 static int check_map_access(struct bpf_verifier_env *env, u32 regno,
-			    int off, int size)
+			    int off, int size, bool zero_size_allowed)
 {
 	struct bpf_verifier_state *vstate = env->cur_state;
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
@@ -1428,8 +1429,8 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 			regno);
 		return -EACCES;
 	}
-
-	err = __check_map_access(env, regno, reg->smin_value + off, size);
+	err = __check_map_access(env, regno, reg->smin_value + off, size,
+				 zero_size_allowed);
 	if (err) {
 		verbose(env, "R%d min value is outside of the array range\n", regno);
 		return err;
@@ -1444,8 +1445,8 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 			regno);
 		return -EACCES;
 	}
-
-	err = __check_map_access(env, regno, reg->umax_value + off, size);
+	err = __check_map_access(env, regno, reg->umax_value + off, size,
+				 zero_size_allowed);
 	if (err)
 		verbose(env, "R%d max value is outside of the array range\n", regno);
 
@@ -1501,12 +1502,13 @@ static bool may_access_direct_pkt_data(struct bpf_verifier_env *env,
 }
 
 static int __check_packet_access(struct bpf_verifier_env *env, u32 regno,
-				 int off, int size)
+				 int off, int size, bool zero_size_allowed)
 {
 	struct bpf_reg_state *regs = cur_regs(env);
 	struct bpf_reg_state *reg = &regs[regno];
 
-	if (off < 0 || size <= 0 || (u64)off + size > reg->range) {
+	if (off < 0 || size < 0 || (size == 0 && !zero_size_allowed) ||
+	    (u64)off + size > reg->range) {
 		verbose(env, "invalid access to packet, off=%d size=%d, R%d(id=%d,off=%d,r=%d)\n",
 			off, size, regno, reg->id, reg->off, reg->range);
 		return -EACCES;
@@ -1515,7 +1517,7 @@ static int __check_packet_access(struct bpf_verifier_env *env, u32 regno,
 }
 
 static int check_packet_access(struct bpf_verifier_env *env, u32 regno, int off,
-			       int size)
+			       int size, bool zero_size_allowed)
 {
 	struct bpf_reg_state *regs = cur_regs(env);
 	struct bpf_reg_state *reg = &regs[regno];
@@ -1534,7 +1536,7 @@ static int check_packet_access(struct bpf_verifier_env *env, u32 regno, int off,
 			regno);
 		return -EACCES;
 	}
-	err = __check_packet_access(env, regno, off, size);
+	err = __check_packet_access(env, regno, off, size, zero_size_allowed);
 	if (err) {
 		verbose(env, "R%d offset is outside of the packet\n", regno);
 		return err;
@@ -1974,7 +1976,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 			return -EACCES;
 		}
 
-		err = check_map_access(env, regno, off, size);
+		err = check_map_access(env, regno, off, size, false);
 		if (!err && t == BPF_READ && value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
 
@@ -2034,7 +2036,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		    is_pointer_value(env, value_regno)) {
 			return -EACCES;
 		}
-		err = check_packet_access(env, regno, off, size);
+		err = check_packet_access(env, regno, off, size, false);
 		if (!err && t == BPF_READ && value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
 	} else if (reg->type == PTR_TO_FLOW_KEYS) {
@@ -2157,7 +2159,7 @@ static int check_stack_boundary(struct bpf_verifier_env *env, int regno,
 	}
 	off = reg->off + reg->var_off.value;
 	if (off >= 0 || off < -MAX_BPF_STACK || off + access_size > 0 ||
-	    access_size <= 0) {
+	    access_size < 0 || (access_size == 0 && !zero_size_allowed)) {
 		verbose(env, "invalid stack type R%d off=%d access_size=%d\n",
 			regno, off, access_size);
 		return -EACCES;
@@ -2193,11 +2195,13 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 	switch (reg->type) {
 	case PTR_TO_PACKET:
 	case PTR_TO_PACKET_META:
-		return check_packet_access(env, regno, reg->off, access_size);
+		return check_packet_access(env, regno, reg->off, access_size,
+					   zero_size_allowed);
 	case PTR_TO_FLOW_KEYS:
 		return check_flow_keys_access(env, reg->off, access_size);
 	case PTR_TO_MAP_VALUE:
-		return check_map_access(env, regno, reg->off, access_size);
+		return check_map_access(env, regno, reg->off, access_size,
+					zero_size_allowed);
 	default: /* scalar_value|ptr_to_stack or invalid ptr */
 		return check_stack_boundary(env, regno, access_size,
 					    zero_size_allowed, meta);
@@ -3417,7 +3421,7 @@ static int sanitize_check_bounds(struct bpf_verifier_env *env,
 		}
 		break;
 	case PTR_TO_MAP_VALUE:
-		if (check_map_access(env, dst, dst_reg->off, 1)) {
+		if (check_map_access(env, dst, dst_reg->off, 1, false)) {
 			verbose(env, "R%d pointer arithmetic of map value goes out of range, "
 				"prohibited for !root\n", dst);
 			return -EACCES;
