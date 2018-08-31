@@ -339,8 +339,8 @@ static int xdp_umem_reg(struct xdp_umem *umem, struct xdp_umem_reg *mr)
 		return -EINVAL;
 
 	umem->address = (unsigned long)addr;
-	umem->props.chunk_mask = ~((u64)chunk_size - 1);
-	umem->props.size = size;
+	umem->chunk_mask = ~((u64)chunk_size - 1);
+	umem->size = size;
 	umem->headroom = headroom;
 	umem->chunk_size_nohr = chunk_size - headroom;
 	umem->npgs = (u32)npgs;
