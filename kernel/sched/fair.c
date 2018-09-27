@@ -3698,7 +3698,7 @@ static inline unsigned long _task_util_est(struct task_struct *p)
 	return max(ue.ewma, ue.enqueued);
 }
 
-static inline unsigned long task_util_est(struct task_struct *p)
+unsigned long task_util_est(struct task_struct *p)
 {
 #ifdef CONFIG_SCHED_WALT
 	if (likely(!walt_disabled && sysctl_sched_use_walt_task_util))
@@ -6788,8 +6788,7 @@ schedtune_cpu_margin(unsigned long util, int cpu)
 	return schedtune_margin(util, boost);
 }
 
-static inline long
-schedtune_task_margin(struct task_struct *task)
+long schedtune_task_margin(struct task_struct *task)
 {
 	int boost = schedtune_task_boost(task);
 	unsigned long util;
@@ -6812,12 +6811,6 @@ schedtune_cpu_margin(unsigned long util, int cpu)
 	return 0;
 }
 
-static inline int
-schedtune_task_margin(struct task_struct *task)
-{
-	return 0;
-}
-
 #endif /* CONFIG_SCHED_TUNE */
 
 unsigned long
@@ -6827,17 +6820,6 @@ stune_util(int cpu)
 	long margin = schedtune_cpu_margin(util, cpu);
 
 	trace_sched_boost_cpu(cpu, util, margin);
-
-	return util + margin;
-}
-
-static inline unsigned long
-boosted_task_util(struct task_struct *task)
-{
-	unsigned long util = task_util_est(task);
-	long margin = schedtune_task_margin(task);
-
-	trace_sched_boost_task(task, util, margin);
 
 	return util + margin;
 }
@@ -7329,7 +7311,7 @@ static inline int select_idle_sibling_cstate_aware(struct task_struct *p, int pr
 					goto next;
 
 				/* figure out if the task can fit here at all */
-				new_usage = boosted_task_util(p);
+				new_usage = uclamp_task(p);
 				capacity_orig = capacity_orig_of(i);
 
 				if (new_usage > capacity_orig)
@@ -7375,7 +7357,7 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 
 static inline int task_fits_capacity(struct task_struct *p, long capacity)
 {
-	return capacity * 1024 > boosted_task_util(p) * capacity_margin;
+	return capacity * 1024 > uclamp_task(p) * capacity_margin;
 }
 
 static int start_cpu(bool boosted)
@@ -7388,7 +7370,7 @@ static int start_cpu(bool boosted)
 static inline int find_best_target(struct task_struct *p, int *backup_cpu,
 				   bool boosted, bool prefer_idle)
 {
-	unsigned long min_util = boosted_task_util(p);
+	unsigned long min_util = uclamp_task(p);
 	unsigned long target_capacity = ULONG_MAX;
 	unsigned long min_wake_util = ULONG_MAX;
 	unsigned long target_max_spare_cap = 0;
@@ -7846,7 +7828,7 @@ static inline struct energy_env *get_eenv(struct task_struct *p, int prev_cpu)
 	 * util for group utilization calculations
 	 */
 	eenv->util_delta = task_util_est(p);
-	eenv->util_delta_boosted = boosted_task_util(p);
+	eenv->util_delta_boosted = uclamp_task(p);
 
 	cpumask_and(&cpumask_possible_cpus, &p->cpus_allowed, cpu_online_mask);
 	eenv->max_cpu_count = cpumask_weight(&cpumask_possible_cpus);
@@ -7917,7 +7899,7 @@ static int find_energy_efficient_cpu(struct sched_domain *sd,
 				break;
 		}
 	} else {
-		int boosted = (schedtune_task_boost(p) > 0);
+		int boosted = (uclamp_boosted(p) > 0);
 		int prefer_idle;
 
 		/*
@@ -7926,7 +7908,7 @@ static int find_energy_efficient_cpu(struct sched_domain *sd,
 		 * all if(prefer_idle) blocks.
 		 */
 		prefer_idle = sched_feat(EAS_PREFER_IDLE) ?
-				(schedtune_prefer_idle(p) > 0) : 0;
+				(uclamp_latency_sensitive(p) > 0) : 0;
 
 		eenv->max_cpu_count = EAS_CPU_BKP + 1;
 
@@ -8015,7 +7997,7 @@ static inline int wake_energy(struct task_struct *p, int prev_cpu,
 		 * Force prefer-idle tasks into the slow path, this may not happen
 		 * if none of the sd flags matched.
 		 */
-		if (schedtune_prefer_idle(p) > 0 && !sync)
+		if (uclamp_latency_sensitive(p) > 0 && !sync)
 			return false;
 	}
 	return true;
