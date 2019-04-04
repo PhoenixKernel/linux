@@ -18,8 +18,9 @@
 #include <trace/events/power.h>
 
 #include "sched.h"
+#include "tune.h"
 
-unsigned long boosted_cpu_util(int cpu);
+unsigned long cpu_util_freq(int cpu);
 
 #define SUGOV_KTHREAD_PRIORITY	50
 
@@ -215,7 +216,11 @@ static void sugov_get_util(unsigned long *util, unsigned long *max, int cpu)
 
 	max_cap = arch_scale_cpu_capacity(NULL, cpu);
 
-	*util = boosted_cpu_util(cpu);
+#ifdef CONFIG_SCHED_TUNE
+	*util = stune_util(cpu);
+#else
+	*util = cpu_util_freq(cpu);
+#endif
 	*util = min(*util, max_cap);
 	*max = max_cap;
 
