@@ -88,6 +88,7 @@ struct xdp_buff;
 #ifdef CONFIG_XDP_SOCKETS
 int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp);
 /* Used from netdev driver */
+bool xsk_umem_has_addrs(struct xdp_umem *umem, u32 cnt);
 u64 *xsk_umem_peek_addr(struct xdp_umem *umem, u64 *addr);
 void xsk_umem_discard_addr(struct xdp_umem *umem);
 void xsk_umem_complete_tx(struct xdp_umem *umem, u32 nb_entries);
@@ -126,6 +127,16 @@ static inline dma_addr_t xdp_umem_get_dma(struct xdp_umem *umem, u64 addr)
 }
 
 /* Reuse-queue aware version of FILL queue helpers */
+static inline bool xsk_umem_has_addrs_rq(struct xdp_umem *umem, u32 cnt)
+{
+	struct xdp_umem_fq_reuse *rq = umem->fq_reuse;
+
+	if (rq->length >= cnt)
+		return true;
+
+	return xsk_umem_has_addrs(umem, cnt - rq->length);
+}
+
 static inline u64 *xsk_umem_peek_addr_rq(struct xdp_umem *umem, u64 *addr)
 {
 	struct xdp_umem_fq_reuse *rq = umem->fq_reuse;
@@ -157,6 +168,11 @@ static inline void xsk_umem_fq_reuse(struct xdp_umem *umem, u64 addr)
 static inline int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 {
 	return -ENOTSUPP;
+}
+
+static inline bool xsk_umem_has_addrs(struct xdp_umem *umem, u32 cnt)
+{
+	return false;
 }
 
 static inline u64 *xsk_umem_peek_addr(struct xdp_umem *umem, u64 *addr)
@@ -211,6 +227,11 @@ static inline char *xdp_umem_get_data(struct xdp_umem *umem, u64 addr)
 static inline dma_addr_t xdp_umem_get_dma(struct xdp_umem *umem, u64 addr)
 {
 	return 0;
+}
+
+static inline bool xsk_umem_has_addrs_rq(struct xdp_umem *umem, u32 cnt)
+{
+	return false;
 }
 
 static inline u64 *xsk_umem_peek_addr_rq(struct xdp_umem *umem, u64 *addr)
