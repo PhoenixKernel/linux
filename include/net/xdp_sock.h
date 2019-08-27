@@ -16,6 +16,13 @@
 struct net_device;
 struct xsk_queue;
 
+/* Masks for xdp_umem_page flags.
+ * The low 12-bits of the addr will be 0 since this is the page address, so we
+ * can use them for flags.
+ */
+#define XSK_NEXT_PG_CONTIG_SHIFT 0
+#define XSK_NEXT_PG_CONTIG_MASK (1ULL << XSK_NEXT_PG_CONTIG_SHIFT)
+
 struct xdp_umem_page {
 	void *addr;
 	dma_addr_t dma;
@@ -27,8 +34,12 @@ struct xdp_umem_fq_reuse {
 	u64 handles[];
 };
 
-/* Flags for the umem flags field. */
-#define XDP_UMEM_USES_NEED_WAKEUP (1 << 0)
+/* Flags for the umem flags field.
+ *
+ * The NEED_WAKEUP flag is 1 due to the reuse of the flags field for public
+ * flags. See inlude/uapi/include/linux/if_xdp.h.
+ */
+#define XDP_UMEM_USES_NEED_WAKEUP (1 << 1)
 
 struct xdp_umem {
 	struct xsk_queue *fq;
@@ -128,14 +139,36 @@ static inline struct xdp_sock *__xsk_map_lookup_elem(struct bpf_map *map,
 	return xs;
 }
 
+static inline u64 xsk_umem_extract_addr(u64 addr)
+{
+	return addr & XSK_UNALIGNED_BUF_ADDR_MASK;
+}
+
+static inline u64 xsk_umem_extract_offset(u64 addr)
+{
+	return addr >> XSK_UNALIGNED_BUF_OFFSET_SHIFT;
+}
+
+static inline u64 xsk_umem_add_offset_to_addr(u64 addr)
+{
+	return xsk_umem_extract_addr(addr) + xsk_umem_extract_offset(addr);
+}
+
 static inline char *xdp_umem_get_data(struct xdp_umem *umem, u64 addr)
 {
-	return umem->pages[addr >> PAGE_SHIFT].addr + (addr & (PAGE_SIZE - 1));
+	unsigned long page_addr;
+
+	addr = xsk_umem_add_offset_to_addr(addr);
+	page_addr = (unsigned long)umem->pages[addr >> PAGE_SHIFT].addr;
+
+	return (char *)(page_addr & PAGE_MASK) + (addr & ~PAGE_MASK);
 }
 
 static inline dma_addr_t xdp_umem_get_dma(struct xdp_umem *umem, u64 addr)
 {
-	return umem->pages[addr >> PAGE_SHIFT].dma + (addr & (PAGE_SIZE - 1));
+	addr = xsk_umem_add_offset_to_addr(addr);
+
+	return umem->pages[addr >> PAGE_SHIFT].dma + (addr & ~PAGE_MASK);
 }
 
 /* Reuse-queue aware version of FILL queue helpers */
@@ -175,6 +208,19 @@ static inline void xsk_umem_fq_reuse(struct xdp_umem *umem, u64 addr)
 	struct xdp_umem_fq_reuse *rq = umem->fq_reuse;
 
 	rq->handles[rq->length++] = addr;
+}
+
+/* Handle the offset appropriately depending on aligned or unaligned mode.
+ * For unaligned mode, we store the offset in the upper 16-bits of the address.
+ * For aligned mode, we simply add the offset to the address.
+ */
+static inline u64 xsk_umem_adjust_offset(struct xdp_umem *umem, u64 address,
+					 u64 offset)
+{
+	if (umem->flags & XDP_UMEM_UNALIGNED_CHUNK_FLAG)
+		return address + (offset << XSK_UNALIGNED_BUF_OFFSET_SHIFT);
+	else
+		return address + offset;
 }
 #else
 static inline int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
@@ -231,6 +277,21 @@ static inline struct xdp_umem *xdp_get_umem_from_qid(struct net_device *dev,
 	return NULL;
 }
 
+static inline u64 xsk_umem_extract_addr(u64 addr)
+{
+	return 0;
+}
+
+static inline u64 xsk_umem_extract_offset(u64 addr)
+{
+	return 0;
+}
+
+static inline u64 xsk_umem_add_offset_to_addr(u64 addr)
+{
+	return 0;
+}
+
 static inline char *xdp_umem_get_data(struct xdp_umem *umem, u64 addr)
 {
 	return NULL;
@@ -278,6 +339,12 @@ static inline void xsk_clear_tx_need_wakeup(struct xdp_umem *umem)
 static inline bool xsk_umem_uses_need_wakeup(struct xdp_umem *umem)
 {
 	return false;
+}
+
+static inline u64 xsk_umem_adjust_offset(struct xdp_umem *umem, u64 handle,
+					 u64 offset)
+{
+	return 0;
 }
 
 static inline int __xsk_map_redirect(struct xdp_sock *xs, struct xdp_buff *xdp)
