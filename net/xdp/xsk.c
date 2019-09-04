@@ -188,9 +188,22 @@ static int __xsk_rcv_zc(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len)
 	return err;
 }
 
+static bool xsk_is_bound(struct xdp_sock *xs)
+{
+	if (READ_ONCE(xs->state) == XSK_BOUND) {
+		/* Matches smp_wmb() in bind(). */
+		smp_rmb();
+		return true;
+	}
+	return false;
+}
+
 static int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 {
 	u32 len;
+
+	if (!xsk_is_bound(xs))
+		return -EINVAL;
 
 	if (xs->dev != xdp->rxq->dev || xs->queue_id != xdp->rxq->queue_index)
 		return -EINVAL;
@@ -413,7 +426,7 @@ static int xsk_sendmsg(struct socket *sock, struct msghdr *m, size_t total_len)
 	struct sock *sk = sock->sk;
 	struct xdp_sock *xs = xdp_sk(sk);
 
-	if (unlikely(!xs->dev))
+	if (unlikely(!xsk_is_bound(xs)))
 		return -ENXIO;
 	if (unlikely(!(xs->dev->flags & IFF_UP)))
 		return -ENETDOWN;
@@ -429,10 +442,15 @@ static __poll_t xsk_poll(struct file *file, struct socket *sock,
 			     struct poll_table_struct *wait)
 {
 	__poll_t mask = datagram_poll(file, sock, wait);
-	struct sock *sk = sock->sk;
-	struct xdp_sock *xs = xdp_sk(sk);
-	struct net_device *dev = xs->dev;
-	struct xdp_umem *umem = xs->umem;
+	struct xdp_sock *xs = xdp_sk(sock->sk);
+	struct net_device *dev;
+	struct xdp_umem *umem;
+
+	if (unlikely(!xsk_is_bound(xs)))
+		return mask;
+
+	dev = xs->dev;
+	umem = xs->umem;
 
 	if (umem->need_wakeup)
 		dev->netdev_ops->ndo_xsk_wakeup(dev, xs->queue_id,
@@ -468,10 +486,9 @@ static void xsk_unbind_dev(struct xdp_sock *xs)
 {
 	struct net_device *dev = xs->dev;
 
-	if (!dev || xs->state != XSK_BOUND)
+	if (xs->state != XSK_BOUND)
 		return;
-
-	xs->state = XSK_UNBOUND;
+	WRITE_ONCE(xs->state, XSK_UNBOUND);
 
 	/* Wait for driver to stop using the xdp socket. */
 	xdp_del_sk_umem(xs->umem, xs);
@@ -546,7 +563,9 @@ static int xsk_release(struct socket *sock)
 	local_bh_enable();
 
 	xsk_delete_from_maps(xs);
+	mutex_lock(&xs->mutex);
 	xsk_unbind_dev(xs);
+	mutex_unlock(&xs->mutex);
 
 	xskq_destroy(xs->rx);
 	xskq_destroy(xs->tx);
@@ -658,12 +677,12 @@ static int xsk_bind(struct socket *sock, struct sockaddr *addr, int addr_len)
 		}
 
 		umem_xs = xdp_sk(sock->sk);
-		if (!umem_xs->umem) {
-			/* No umem to inherit. */
+		if (!xsk_is_bound(umem_xs)) {
 			err = -EBADF;
 			sockfd_put(sock);
 			goto out_unlock;
-		} else if (umem_xs->dev != dev || umem_xs->queue_id != qid) {
+		}
+		if (umem_xs->dev != dev || umem_xs->queue_id != qid) {
 			err = -EINVAL;
 			sockfd_put(sock);
 			goto out_unlock;
@@ -697,10 +716,15 @@ static int xsk_bind(struct socket *sock, struct sockaddr *addr, int addr_len)
 	xdp_add_sk_umem(xs->umem, xs);
 
 out_unlock:
-	if (err)
+	if (err) {
 		dev_put(dev);
-	else
-		xs->state = XSK_BOUND;
+	} else {
+		/* Matches smp_rmb() in bind() for shared umem
+		 * sockets, and xsk_is_bound().
+		 */
+		smp_wmb();
+		WRITE_ONCE(xs->state, XSK_BOUND);
+	}
 out_release:
 	mutex_unlock(&xs->mutex);
 	rtnl_unlock();
@@ -935,7 +959,7 @@ static int xsk_mmap(struct file *file, struct socket *sock,
 	unsigned long pfn;
 	struct page *qpg;
 
-	if (xs->state != XSK_READY)
+	if (READ_ONCE(xs->state) != XSK_READY)
 		return -EBUSY;
 
 	if (offset == XDP_PGOFF_RX_RING) {
