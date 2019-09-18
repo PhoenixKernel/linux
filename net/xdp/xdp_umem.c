@@ -393,8 +393,6 @@ static int xdp_umem_reg(struct xdp_umem *umem, struct xdp_umem_reg *mr)
 			return -EINVAL;
 	}
 
-	headroom = ALIGN(headroom, 64);
-
 	if (headroom >= chunk_size - XDP_PACKET_HEADROOM)
 		return -EINVAL;
 
