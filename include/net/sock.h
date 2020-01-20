@@ -2630,4 +2630,6 @@ extern __u32 sysctl_rmem_default;
 
 int sock_bindtoindex(struct sock *sk, int ifindex, bool lock_sk);
 
+void sock_def_readable(struct sock *sk);
+
 #endif	/* _SOCK_H */
