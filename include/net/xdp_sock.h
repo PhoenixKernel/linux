@@ -62,8 +62,8 @@ struct xdp_umem {
 	struct net_device *dev;
 	struct xdp_umem_fq_reuse *fq_reuse;
 	bool zc;
-	spinlock_t xsk_list_lock;
-	struct list_head xsk_list;
+	spinlock_t xsk_tx_list_lock;
+	struct list_head xsk_tx_list;
 };
 
 struct xsk_map {
