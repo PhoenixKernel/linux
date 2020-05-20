@@ -26,7 +26,7 @@
 #include <linux/rtnetlink.h>
 #include <linux/sched/signal.h>
 #include <linux/net.h>
-#include <net/xdp_sock.h>
+#include <net/xdp_sock_drv.h>
 
 /*
  * Some useful ethtool_ops methods that're device independent.
