@@ -24,9 +24,8 @@
  * Output:
  * rax: dest
  */
-.weak memmove
 
-ENTRY(memmove)
+WEAK(memmove)
 ENTRY(__memmove)
 
 	/* Handle more 32 bytes in loop */
