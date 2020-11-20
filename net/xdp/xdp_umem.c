@@ -146,8 +146,10 @@ int xdp_umem_assign_dev(struct xdp_umem *umem, struct net_device *dev,
 err_unreg_umem:
 	if (!force_zc)
 		err = 0; /* fallback to copy mode */
-	if (err)
+	if (err) {
 		xdp_clear_umem_at_qid(dev, queue_id);
+		dev_put(dev);
+	}
 	return err;
 }
 
