@@ -31,6 +31,11 @@ struct xdp_umem_fq_reuse {
 struct xdp_umem {
 	struct xsk_queue *fq;
 	struct xsk_queue *cq;
+	/* Mutual exclusion of the completion ring in the SKB mode. Two cases to protect:
+	 * NAPI TX thread and sendmsg error paths in the SKB destructor callback and when
+	 * sockets share a single cq when the same netdev and queue id is shared.
+	 */
+	spinlock_t cq_lock;
 	struct xdp_umem_page *pages;
 	u64 chunk_mask;
 	u64 size;
@@ -76,10 +81,6 @@ struct xdp_sock {
 	struct mutex mutex;
 	struct xsk_queue *tx ____cacheline_aligned_in_smp;
 	struct list_head list;
-	/* Mutual exclusion of NAPI TX thread and sendmsg error paths
-	 * in the SKB destructor callback.
-	 */
-	spinlock_t tx_completion_lock;
 	/* Protects generic receive. */
 	spinlock_t rx_lock;
 	u64 rx_dropped;
